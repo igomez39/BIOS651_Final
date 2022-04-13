@@ -50,30 +50,43 @@ Age of recipient at time of transplant has a significant effect on death
 
 
 
-# Reduced model
+# Reduced logistic model
 Living v. death ~ age of donor + age of recipient + recipient diab + recipient bmi + donor hyp + donor diab + Donor hypertension*donor diabetes + Recipient diabetes*recipient bmi + same race
 ```{r}
 kidney$success <- ifelse(kidney$event==1,1,0) # we are defining success as survival, graft failure and death are grouped together
 kidney$same_race <- ifelse(kidney$DON_RACE==kidney$REC_RACE,1,0)
 kidney$rec_diab_yn <- ifelse(kidney$REC_DIAB=="None",0,1)
-glm.red <- glm(formula = success ~ DON_AGE + REC_AGE_AT_TX + REC_DIAB + REC_BMI +
+# make age groups
+#Donors: under 18, 18-39, 40-65, 65+
+#Recipients: 18-39, 40-65, 65+
+kidney$DON_AGE_CAT <- cut(kidney$DON_AGE, 
+                          breaks = c(0,18,39,65,80),
+                          labels = c("under 18","18-39","40-65","65+"))
+kidney$REC_AGE_AT_TX_CAT <- cut(kidney$REC_AGE_AT_TX,
+                                breaks = c(18,39,65,90),
+                                labels = c("18-39","40-65","65+"))
+
+kidney_2 <- na.omit(kidney) # omit patients with NA's in any column
+glm.red <- glm(formula = success ~ DON_AGE_CAT + REC_AGE_AT_TX_CAT + REC_DIAB + REC_BMI +
                  DON_HTN + DON_HIST_DIAB + DON_HTN*DON_HIST_DIAB + 
-                 REC_DIAB*REC_BMI + same_race,
+                 REC_DIAB*REC_BMI + same_race + REC_AGE_AT_TX_CAT*DON_AGE_CAT,
+                 data = kidney,
+                 family = binomial(link=logit))
+glm.red_noagecat <- glm(formula = success ~ DON_AGE + REC_AGE_AT_TX + REC_DIAB + REC_BMI +
+                 DON_HTN + DON_HIST_DIAB + DON_HTN*DON_HIST_DIAB + 
+                 REC_DIAB*REC_BMI + same_race + REC_AGE_AT_TX*DON_AGE,
                  data = kidney,
                  family = binomial(link=logit))
 
 summary(glm.red)
+#summary(glm.red_noagecat)
 
-glm.red2 <- glm(formula = success ~ DON_AGE + REC_AGE_AT_TX + rec_diab_yn + REC_BMI +
-                 DON_HTN + DON_HIST_DIAB + DON_HTN*DON_HIST_DIAB + 
-                 rec_diab_yn*REC_BMI + same_race,
-                 data = kidney,
-                 family = binomial(link=logit))
-
-summary(glm.red2)
+# Deviance/Pearson's goodness of fit test
+D = 2*(2981.0-2862.3)
 
 ```
 
+Deviance goodness of fit test: Testing the null hypothesis that the model with the intercept only is better against the alternative hypothesis that the model with all the covariates is the better model. D = 2(2981.0-2862.3) = 237.4 is ~$\chi^2_{22}$. The critical point for $\chi^2_{22}$ is 33.924. Since 237.4 > 33.924, we reject the null hypothesis and conclude that the model with all our covariates is the better model.
 
 
 
@@ -81,18 +94,40 @@ Should we also be looking at specific type of diabetes? Type 1 vs type 2?
 
 
 # Multinomial Regression
+
+We may have to remove the patients who have an NA in any of their columns, but it isnt that many, its only 19
 ```{r}
-#multi.vglm<-vglm(as.factor(ME) ~ HIST ,data=df, family = multinomial(refLevel = 1))
-multi_mod <- vglm(as.factor(event) ~ DON_AGE + REC_AGE_AT_TX + rec_diab_yn + REC_BMI +
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(knitr, gmodels, car, lmtest, VGAM, nnet)
+
+kidney_2 <- na.omit(kidney) # omit patients with NA's in any column
+kidney_2$REC_BMI_c <- kidney_2$REC_BMI-mean(kidney_2$REC_BMI)# center the bmi for interpretation purposes
+multi_mod_full <- vglm(as.factor(event) ~ DON_AGE_CAT + REC_AGE_AT_TX_CAT + rec_diab_yn + REC_BMI +
                  DON_HTN + DON_HIST_DIAB + DON_HTN*DON_HIST_DIAB + 
-                 rec_diab_yn*REC_BMI + same_race + REC_AGE_AT_TX*DON_AGE,
-                 data = kidney,
+                 rec_diab_yn*REC_BMI + same_race + REC_AGE_AT_TX_CAT*DON_AGE_CAT,
+                 data = kidney_2,
                  family = multinomial(refLevel=1))
 
-summary(multi_mod)
+summary(multi_mod_full)
+
+multi_mod_red <- vglm(as.factor(event) ~ DON_AGE_CAT + REC_AGE_AT_TX_CAT + rec_diab_yn + REC_BMI +
+                 DON_HTN + DON_HIST_DIAB + DON_HTN*DON_HIST_DIAB + 
+                 rec_diab_yn*REC_BMI + same_race,
+                 data = kidney_2,
+                 family = multinomial(refLevel=1))
+
+summary(multi_mod_red)
 #data.frame(c(coef(multi_mod), as.vector(sqrt(diag(vcov(multi_mod))))[3:4]))
 
+# Can't do deviance test so doing hosmer-lemeshow for multinomial regression
+#install.packages("generalhoslem")
+#library(generalhoslem)
+logitgof(kidney_2$event, fitted(multi_mod_full))
+logitgof(kidney_2$event, fitted(multi_mod_red))
 ```
+For the Hosmer-Lemeshow test we are testing the null hypothesis $\H_0:$ the model fits the data well against the alternative hypothesis $H_1:$ the model does not fit the data well. We have a p-value of 0.047 for this test so we reject the null and conclude that the model does not fit the data well.
+
+
 
 ## Proportional odds multinomial regression
 ```{r}
