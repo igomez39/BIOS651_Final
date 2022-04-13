@@ -1,0 +1,182 @@
+---
+title: "651 final project"
+output: html_notebook
+---
+
+```{r}
+library(VGAM)
+```
+
+
+```{r}
+kidney <- read.csv("data/pseudo_kidney_transplant_2005.csv")
+
+```
+
+# Models
+
+### Effect of gender on survival (are male-male/female-female grafts more successful?)
+```{r}
+# create an indicator variable for same sex of donor and recipient
+kidney$same_sex_don_rec <- ifelse(kidney$DON_GENDER==kidney$REC_GENDER, 1,0)
+kidney$success <- ifelse(kidney$event==1,1,0) # we are defining success as survival
+kidney$graft_fail <- ifelse(kidney$event==3,1,0)
+kidney$death <- ifelse(kidney$event==2,1,0)
+
+gender_glm_success <- glm(data=kidney, success ~  same_sex_don_rec, family = binomial())
+summary(gender_glm_success)
+
+gender_glm_graft_fail <- glm(data=kidney, graft_fail ~  same_sex_don_rec, family = binomial())
+summary(gender_glm_graft_fail)
+
+gender_glm_death <- glm(data=kidney, death ~  same_sex_don_rec, family = binomial())
+summary(gender_glm_death)
+```
+
+Not technically significant on survival but will definitely need to control for things like age and weight for this model. Does not appear to have significant effect on graft success or death.
+
+### Effect of age on recipient survival
+```{r}
+age_glm <- glm(data=kidney, success ~  DON_AGE + REC_AGE_AT_TX, family = binomial())
+summary(age_glm)
+
+age_glm_graft_fail <- glm(data=kidney, graft_fail ~  DON_AGE + REC_AGE_AT_TX, family = binomial())
+summary(age_glm_graft_fail)
+
+age_glm_death <- glm(data=kidney, death ~  DON_AGE + REC_AGE_AT_TX, family = binomial())
+summary(age_glm_death)
+```
+
+It looks like donor age definitely has a significant effect on survival.
+Donor age and age of recipient at time of transplant both have significant effects on graft failure
+Age of recipient at time of transplant has a significant effect on death
+
+
+
+
+# Reduced model
+Living v. death ~ age of donor + age of recipient + recipient diab + recipient bmi + donor hyp + donor diab + Donor hypertension*donor diabetes + Recipient diabetes*recipient bmi + same race
+```{r}
+kidney$success <- ifelse(kidney$event==1,1,0) # we are defining success as survival, graft failure and death are grouped together
+kidney$same_race <- ifelse(kidney$DON_RACE==kidney$REC_RACE,1,0)
+kidney$rec_diab_yn <- ifelse(kidney$REC_DIAB=="None",0,1)
+glm.red <- glm(formula = success ~ DON_AGE + REC_AGE_AT_TX + REC_DIAB + REC_BMI +
+                 DON_HTN + DON_HIST_DIAB + DON_HTN*DON_HIST_DIAB + 
+                 REC_DIAB*REC_BMI + same_race,
+                 data = kidney,
+                 family = binomial(link=logit))
+
+summary(glm.red)
+
+glm.red2 <- glm(formula = success ~ DON_AGE + REC_AGE_AT_TX + rec_diab_yn + REC_BMI +
+                 DON_HTN + DON_HIST_DIAB + DON_HTN*DON_HIST_DIAB + 
+                 rec_diab_yn*REC_BMI + same_race,
+                 data = kidney,
+                 family = binomial(link=logit))
+
+summary(glm.red2)
+
+```
+
+
+
+
+Should we also be looking at specific type of diabetes? Type 1 vs type 2?
+
+
+# Multinomial Regression
+```{r}
+#multi.vglm<-vglm(as.factor(ME) ~ HIST ,data=df, family = multinomial(refLevel = 1))
+multi_mod <- vglm(as.factor(event) ~ DON_AGE + REC_AGE_AT_TX + rec_diab_yn + REC_BMI +
+                 DON_HTN + DON_HIST_DIAB + DON_HTN*DON_HIST_DIAB + 
+                 rec_diab_yn*REC_BMI + same_race + REC_AGE_AT_TX*DON_AGE,
+                 data = kidney,
+                 family = multinomial(refLevel=1))
+
+summary(multi_mod)
+#data.frame(c(coef(multi_mod), as.vector(sqrt(diag(vcov(multi_mod))))[3:4]))
+
+```
+
+## Proportional odds multinomial regression
+```{r}
+kidney$ord_event<-factor(kidney$event, levels=c("1", "2", "3"), ordered = T) # We would need to specify the order for response variable
+propOdd.vglm<-vglm(ord_event~ DON_AGE + REC_AGE_AT_TX + rec_diab_yn + REC_BMI +
+                 DON_HTN + DON_HIST_DIAB + DON_HTN*DON_HIST_DIAB + 
+                 rec_diab_yn*REC_BMI + same_race ,data=kidney, family = cumulative(link = "logitlink", parallel = TRUE))
+
+summary(propOdd.vglm)
+NoPropOdd.vglm<-vglm(ord_event~ DON_AGE + REC_AGE_AT_TX + rec_diab_yn + REC_BMI +
+                 DON_HTN + DON_HIST_DIAB + DON_HTN*DON_HIST_DIAB + 
+                 rec_diab_yn*REC_BMI + same_race ,data=kidney, family = cumulative(link = "logitlink", parallel = FALSE))
+summary(NoPropOdd.vglm)
+# To fit the model without proportional odds assumption, we could just set parallel argument as false
+lrtest(NoPropOdd.vglm,propOdd.vglm)
+prop_test<-lrtest(NoPropOdd.vglm,propOdd.vglm)
+```
+
+
+# CREATE AGE CATEGORY VARIABLES
+Donors: under 18, 18-39, 40-65, 65+
+```{r}
+kidney$DON_AGE_CAT = cut(kidney$DON_AGE, breaks = c(0,18,40,65,100))
+```
+
+
+Recipients: 18-39, 40-65, 65+
+
+```{r}
+kidney$REC_AGE_CAT = cut(kidney$REC_AGE_AT_TX, breaks = c(0,40,65,100))
+```
+
+##FITTING LUCYS MODEL
+```{r}
+glm.cat.full <- glm(formula = success ~ DON_AGE_CAT + REC_AGE_CAT + rec_diab_yn + REC_BMI +
+                 DON_HTN + DON_HIST_DIAB + DON_HTN*DON_HIST_DIAB + 
+                 rec_diab_yn*REC_BMI + same_race + DON_AGE_CAT*REC_AGE_CAT,
+                 data = kidney,
+                 family = binomial(link=logit))
+
+summary(glm.cat.age)
+```
+
+
+## FITTING MAYAS MODEL (REDUCED)
+```{r}
+glm.red2 <- glm(formula = success ~ DON_AGE_CAT + REC_AGE_CAT + rec_diab_yn + REC_BMI +
+                 DON_HTN + DON_HIST_DIAB + DON_HTN*DON_HIST_DIAB + 
+                 rec_diab_yn*REC_BMI + same_race,
+                 data = kidney,
+                 family = binomial(link=logit))
+
+summary(glm.red2)
+
+```
+
+
+#LRT 
+```{r}
+anova(glm.red2,glm.cat.full,test='LRT')
+```
+
+
+# MULTINOMIAL
+```{r}
+multi_mod_full <- vglm(as.factor(event) ~ DON_AGE_CAT + REC_AGE_CAT + rec_diab_yn + REC_BMI +
+                 DON_HTN + DON_HIST_DIAB + DON_HTN*DON_HIST_DIAB + 
+                 rec_diab_yn*REC_BMI + same_race + REC_AGE_CAT*DON_AGE_CAT,
+                 data = kidney,
+                 family = multinomial(refLevel=1))
+
+
+multi_mod_reduced <- vglm(as.factor(event) ~ DON_AGE_CAT + REC_AGE_CAT + rec_diab_yn + REC_BMI +
+                 DON_HTN + DON_HIST_DIAB + DON_HTN*DON_HIST_DIAB + 
+                 rec_diab_yn*REC_BMI + same_race,
+                 data = kidney,
+                 family = multinomial(refLevel=1))
+```
+
+```{r}
+lrtest(multi_mod_full, multi_mod_reduced) 
+```
+
